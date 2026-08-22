@@ -20,6 +20,11 @@
 #define BUFF_SIZE 20
 #define BUFF_SIZE 20
 #define DRIVER_NAME "sobel"
+
+#define START_OFFSET 0
+#define BASE_ADDR_OFFSET 4
+#define READY_OFFSET 8
+
 MODULE_LICENSE("Dual BSD/GPL");
 
 struct sobel_info {
@@ -141,87 +146,90 @@ int sobel_close(struct inode *pinode, struct file *pfile)
 
 ssize_t sobel_read(struct file *pfile, char __user *buffer, size_t length, loff_t *offset) 
 {
-	/*
 	int ret;
 	int len = 0;
-	u32 sobel_val = 0;
-	int i = 0;
+	u32 ready_val = 0;
 	char buff[BUFF_SIZE];
 	if (endRead){
 		endRead = 0;
 		return 0;
 	}
 
-	sobel_val = ioread32(lp->base_addr);
+	ready_val = ioread32(lp->base_addr + READY_OFFSET);
 
-	//buffer: 0b????
-	//index:  012345
+	if((ready_val) & 0x01)
+		buff[0] = '1';
+	else
+		buff[0] = '0';
 
-	buff[0]= '0';
-	buff[1]= 'b';
-	for(i=0;i<4;i++)
-	{
-		if((sobel_val >> i) & 0x01)
-			buff[5-i] = '1';
-		else
-			buff[5-i] = '0';
-	}
-	buff[6]= '\n';
-	len=7;
+	buff[1]= '\n';
+	len=2;
 	ret = copy_to_user(buffer, buff, len);
 	if(ret)
 		return -EFAULT;
-	//printk(KERN_INFO "Succesfully read\n");
+	printk(KERN_INFO "Succesfully read\n");
 	endRead = 1;
 
 	return len;
-	*/
-	printk(KERN_INFO "Succesfully read from file\n"); 
-	return 0;
 }
 
 ssize_t sobel_write(struct file *pfile, const char __user *buffer, size_t length, loff_t *offset) 
 {
-	/*
+
 	char buff[BUFF_SIZE];
 	int ret = 0;
-	long int sobel_val=0;
+	u32 base_addr_val=0;
+	char *at;
+
+	if (length >= BUFF_SIZE)
+    		return -EINVAL;
 
 	ret = copy_from_user(buff, buffer, length);
 	if(ret)
 		return -EFAULT;
 	buff[length] = '\0';
 
-	// HEX  INPUT
-	if(buff[0] == '0' && (buff[1] == 'x' || buff[1] == 'X')) 
-	{
-		ret = kstrtol(buff+2,16,&sobel_val);
+	// check first 5 chars are "start"
+	if (strncmp(buff, "start", 5) != 0) {
+		printk(KERN_ERR "sobel: expected 'start @your_address' command\n");
+		return -EINVAL;
 	}
-	// BINARY INPUT
-	else if(buff[0] == '0'  && (buff[1] == 'b' || buff[1] == 'B')) 
+
+	// find the '@', parse what follows as hex
+	at = strchr(buff, '@');
+	if (!at) {
+		printk(KERN_ERR "sobel: no '@your_address' found\n");
+		return -EINVAL;
+	}
+
+
+	// HEX  INPUT
+	if(*(at + 1) == '0' && (*(at + 2) == 'x' || *(at + 2) == 'X')) 
 	{
-		ret = kstrtol(buff+2,2,&sobel_val);
+		ret = kstrtou32(at + 3, 16, &base_addr_val);
 	}
 	// DECIMAL INPUT
 	else 
 	{
-		ret = kstrtol(buff,10,&sobel_val);
+		ret = kstrtou32(at + 1, 10, &base_addr_val);
 	}
 
-	
+
 	if (!ret)
 	{
-		iowrite32((u32)sobel_val, lp->base_addr);
-		//printk(KERN_INFO "Succesfully wrote value %#x",(u32)sobel_val); 
+		iowrite32((u32)base_addr_val, lp->base_addr + BASE_ADDR_OFFSET); 
+		printk(KERN_INFO "Succesfully wrote base address value %#x\n",(u32)base_addr_val);
+
+		iowrite32(1, lp->base_addr + START_OFFSET);
+		iowrite32(0, lp->base_addr + START_OFFSET);
+		printk(KERN_INFO "Succesfully started sobel IP\n");
 	}
 	else
 	{
-		printk(KERN_INFO "Wrong command format\n"); 
+		printk(KERN_INFO "Wrong command format, should be 'start @your_address'\n"); 
 	}
 
-	return length;
-	*/
-	printk(KERN_INFO "Succesfully wrote from file\n"); 
+	//printk(KERN_INFO "Succesfully wrote into file\n"); 
 	return length;
 }
 
@@ -244,7 +252,7 @@ static int __init sobel_init(void)
 		goto fail_0;
 	}
 	printk(KERN_INFO "class created\n");
-   
+
 	my_device = device_create(my_class, NULL, my_dev_id, NULL, DRIVER_NAME);
 	if (my_device == NULL){
 		printk(KERN_ERR "failed to create device\n");
@@ -277,7 +285,7 @@ static int __init sobel_init(void)
 
 static void __exit sobel_exit(void)
 {
-	platform_driver_unregister(&sobel_driver);
+ 	platform_driver_unregister(&sobel_driver);
 	cdev_del(my_cdev);
 	device_destroy(my_class, my_dev_id);
 	class_destroy(my_class);

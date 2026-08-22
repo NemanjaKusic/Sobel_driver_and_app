@@ -2,7 +2,7 @@
 # kernel build system and can use its language.
 ifneq ($(KERNELRELEASE),)
 	obj-m := sobel_driver.o
-	ccflags-y := -march=armv7-a -mfpu=neon
+	ccflags-y := -march=armv7-a -mfpu=neon -fno-stack-protector
 # Otherwise we were called directly from the command
 # line; invoke the kernel build system.
 else
