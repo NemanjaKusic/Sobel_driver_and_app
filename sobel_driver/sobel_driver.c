@@ -23,9 +23,9 @@
 MODULE_LICENSE("Dual BSD/GPL");
 
 struct sobel_info {
-  unsigned long mem_start;
-  unsigned long mem_end;
-  void __iomem *base_addr;
+	unsigned long mem_start;
+	unsigned long mem_end;
+	void __iomem *base_addr;
 };
 
 dev_t my_dev_id;
@@ -56,18 +56,18 @@ struct file_operations my_fops =
 };
 
 static struct of_device_id sobel_of_match[] = {
-  { .compatible = "sobel", },
-  { /* end of list */ },
+	{ .compatible = "sobel", },
+	{ /* end of list */ },
 };
 
 static struct platform_driver sobel_driver = {
-  .driver = {
-    .name = DRIVER_NAME,
-    .owner = THIS_MODULE,
-    .of_match_table	= sobel_of_match,
-  },
-  .probe		= sobel_probe,
-  .remove		= sobel_remove,
+	.driver = {
+		.name = DRIVER_NAME,
+		.owner = THIS_MODULE,
+		.of_match_table	= sobel_of_match,
+	},
+	.probe		= sobel_probe,
+	.remove		= sobel_remove,
 };
 
 
@@ -75,68 +75,68 @@ MODULE_DEVICE_TABLE(of, sobel_of_match);
 
 static int sobel_probe(struct platform_device *pdev)
 {
-  struct resource *r_mem;
-  int rc = 0;
-  r_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-  if (!r_mem) {
-    printk(KERN_ALERT "Failed to get resource\n");
-    return -ENODEV;
-  }
-  lp = (struct sobel_info *) kmalloc(sizeof(struct sobel_info), GFP_KERNEL);
-  if (!lp) {
-    printk(KERN_ALERT "Could not allocate sobel device\n");
-    return -ENOMEM;
-  }
+	struct resource *r_mem;
+	int rc = 0;
+	r_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!r_mem) {
+		printk(KERN_ALERT "Failed to get resource\n");
+		return -ENODEV;
+	}
+	lp = (struct sobel_info *) kmalloc(sizeof(struct sobel_info), GFP_KERNEL);
+	if (!lp) {
+		printk(KERN_ALERT "Could not allocate sobel device\n");
+		return -ENOMEM;
+	}
 
-  lp->mem_start = r_mem->start;
-  lp->mem_end = r_mem->end;
-  //printk(KERN_INFO "Start address:%x \t end address:%x", r_mem->start, r_mem->end);
+	lp->mem_start = r_mem->start;
+	lp->mem_end = r_mem->end;
+	//printk(KERN_INFO "Start address:%x \t end address:%x", r_mem->start, r_mem->end);
 
-  if (!request_mem_region(lp->mem_start,lp->mem_end - lp->mem_start + 1,	DRIVER_NAME))
-  {
-    printk(KERN_ALERT "Could not lock memory region at %p\n",(void *)lp->mem_start);
-    rc = -EBUSY;
-    goto error1;
-  }
+	if (!request_mem_region(lp->mem_start,lp->mem_end - lp->mem_start + 1,	DRIVER_NAME))
+	{
+		printk(KERN_ALERT "Could not lock memory region at %p\n",(void *)lp->mem_start);
+		rc = -EBUSY;
+		goto error1;
+	}
 
-  lp->base_addr = ioremap(lp->mem_start, lp->mem_end - lp->mem_start + 1);
-  if (!lp->base_addr) {
-    printk(KERN_ALERT "Could not allocate memory\n");
-    rc = -EIO;
-    goto error2;
-  }
+	lp->base_addr = ioremap(lp->mem_start, lp->mem_end - lp->mem_start + 1);
+	if (!lp->base_addr) {
+		printk(KERN_ALERT "Could not allocate memory\n");
+		rc = -EIO;
+		goto error2;
+	}
 
-  printk(KERN_WARNING "sobel platform driver registered\n");
-  return 0;//ALL OK
+	printk(KERN_WARNING "sobel platform driver registered\n");
+	return 0;//ALL OK
 
-error2:
-  release_mem_region(lp->mem_start, lp->mem_end - lp->mem_start + 1);
-error1:
-  return rc;
+	error2:
+		release_mem_region(lp->mem_start, lp->mem_end - lp->mem_start + 1);
+	error1:
+		return rc;
 }
 
 static int sobel_remove(struct platform_device *pdev)
 {
-  printk(KERN_WARNING "sobel platform driver removed\n");
-  iowrite32(0, lp->base_addr);
-  iounmap(lp->base_addr);
-  release_mem_region(lp->mem_start, lp->mem_end - lp->mem_start + 1);
-  kfree(lp);
-  return 0;
+	printk(KERN_WARNING "sobel platform driver removed\n");
+	iowrite32(0, lp->base_addr);
+	iounmap(lp->base_addr);
+	release_mem_region(lp->mem_start, lp->mem_end - lp->mem_start + 1);
+	kfree(lp);
+	return 0;
 }
 
 
 
 int sobel_open(struct inode *pinode, struct file *pfile) 
 {
-		printk(KERN_INFO "Succesfully opened sobel\n");
-		return 0;
+	printk(KERN_INFO "Succesfully opened sobel\n");
+	return 0;
 }
 
 int sobel_close(struct inode *pinode, struct file *pfile) 
 {
-		printk(KERN_INFO "Succesfully closed sobel\n");
-		return 0;
+	printk(KERN_INFO "Succesfully closed sobel\n");
+	return 0;
 }
 
 ssize_t sobel_read(struct file *pfile, char __user *buffer, size_t length, loff_t *offset) 
@@ -227,30 +227,30 @@ ssize_t sobel_write(struct file *pfile, const char __user *buffer, size_t length
 
 static int __init sobel_init(void)
 {
-   int ret = 0;
+	int ret = 0;
 
 	//Initialize array
 
-   ret = alloc_chrdev_region(&my_dev_id, 0, 1, DRIVER_NAME);
-   if (ret){
-      printk(KERN_ERR "failed to register char device\n");
-      return ret;
-   }
-   printk(KERN_INFO "char device region allocated\n");
+	ret = alloc_chrdev_region(&my_dev_id, 0, 1, DRIVER_NAME);
+	if (ret){
+		printk(KERN_ERR "failed to register char device\n");
+		return ret;
+	}
+	printk(KERN_INFO "char device region allocated\n");
 
-   my_class = class_create(THIS_MODULE, "sobel_class");
-   if (my_class == NULL){
-      printk(KERN_ERR "failed to create class\n");
-      goto fail_0;
-   }
-   printk(KERN_INFO "class created\n");
+	my_class = class_create(THIS_MODULE, "sobel_class");
+	if (my_class == NULL){
+		printk(KERN_ERR "failed to create class\n");
+		goto fail_0;
+	}
+	printk(KERN_INFO "class created\n");
    
-   my_device = device_create(my_class, NULL, my_dev_id, NULL, DRIVER_NAME);
-   if (my_device == NULL){
-      printk(KERN_ERR "failed to create device\n");
-      goto fail_1;
-   }
-   printk(KERN_INFO "device created\n");
+	my_device = device_create(my_class, NULL, my_dev_id, NULL, DRIVER_NAME);
+	if (my_device == NULL){
+		printk(KERN_ERR "failed to create device\n");
+		goto fail_1;
+	}
+	printk(KERN_INFO "device created\n");
 
 	my_cdev = cdev_alloc();	
 	my_cdev->ops = &my_fops;
@@ -258,31 +258,31 @@ static int __init sobel_init(void)
 	ret = cdev_add(my_cdev, my_dev_id, 1);
 	if (ret)
 	{
-      printk(KERN_ERR "failed to add cdev\n");
+		printk(KERN_ERR "failed to add cdev\n");
 		goto fail_2;
 	}
-   printk(KERN_INFO "cdev added\n");
-   printk(KERN_INFO "Hello world\n");
+	printk(KERN_INFO "cdev added\n");
+	printk(KERN_INFO "Hello world\n");
 
-  return platform_driver_register(&sobel_driver);
+	return platform_driver_register(&sobel_driver);
 
-   fail_2:
-      device_destroy(my_class, my_dev_id);
-   fail_1:
-      class_destroy(my_class);
-   fail_0:
-      unregister_chrdev_region(my_dev_id, 1);
-   return -1;
+	fail_2:
+		device_destroy(my_class, my_dev_id);
+	fail_1:
+		class_destroy(my_class);
+	fail_0:
+		unregister_chrdev_region(my_dev_id, 1);
+	return -1;
 }
 
 static void __exit sobel_exit(void)
 {
-   platform_driver_unregister(&sobel_driver);
-   cdev_del(my_cdev);
-   device_destroy(my_class, my_dev_id);
-   class_destroy(my_class);
-   unregister_chrdev_region(my_dev_id,1);
-   printk(KERN_INFO "Goodbye, cruel world\n");
+	platform_driver_unregister(&sobel_driver);
+	cdev_del(my_cdev);
+	device_destroy(my_class, my_dev_id);
+	class_destroy(my_class);
+	unregister_chrdev_region(my_dev_id,1);
+	printk(KERN_INFO "Goodbye, cruel world\n");
 }
 
 
