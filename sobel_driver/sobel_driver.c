@@ -1,6 +1,10 @@
+#include <linux/dma-mapping.h>	// dma_alloc_coherent()
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/of_address.h>
+#include <linux/delay.h>      // usleep_range()
+#include <linux/jiffies.h>    // jiffies, time_after(), msecs_to_jiffies()
+
 #include <linux/kernel.h>
 #include <linux/string.h>
 #include <linux/module.h>
@@ -25,12 +29,17 @@
 #define BASE_ADDR_OFFSET 4
 #define READY_OFFSET 8
 
+#define SOBEL_DMA_SIZE 1351088   // total bytes the IP needs
+
 MODULE_LICENSE("Dual BSD/GPL");
 
 struct sobel_info {
-	unsigned long mem_start;
-	unsigned long mem_end;
-	void __iomem *base_addr;
+	unsigned long mem_start;	// start of AXI slave cntrl registers
+	unsigned long mem_end;		// end of AXI slave cntrl registers
+	void __iomem *base_addr;	// virtual addr of AXI slave cntrl resgisters
+	void *dma_vaddr;		// CPU virtual addr of the DMA buffer region
+	dma_addr_t dma_handle;		// physical address of the start of the DMA buffer region -> goes to base_address register
+	size_t dma_size;		// DMA buffer region size
 };
 
 dev_t my_dev_id;
@@ -111,6 +120,22 @@ static int sobel_probe(struct platform_device *pdev)
 		goto error2;
 	}
 
+	// DMA allocates the safe memory region inisde DDR
+	lp->dma_size = SOBEL_DMA_SIZE;
+	lp->dma_vaddr = dma_alloc_coherent(&pdev->dev, lp->dma_size, &lp->dma_handle, GFP_KERNEL);
+
+	if (!lp->dma_vaddr) {
+		printk(KERN_ERR "sobel: dma_alloc_coherent failed for %zu bytes\n", lp->dma_size);
+		return -ENOMEM;
+	}
+
+	printk(KERN_INFO "sobel: DMA buffer allocated, size=%zu, phys=%pad, virt=%p\n", lp->dma_size, &lp->dma_handle, lp->dma_vaddr);
+
+	//confirm the physical address is reachable by the HP port (must be below 0x20000000)
+	if (lp->dma_handle >= 0x20000000) {
+		printk(KERN_WARNING "sobel: WARNING - phys addr %pad may be outside HP0 range!\n", &lp->dma_handle);
+	}
+
 	printk(KERN_WARNING "sobel platform driver registered\n");
 	return 0;//ALL OK
 
@@ -122,6 +147,11 @@ static int sobel_probe(struct platform_device *pdev)
 
 static int sobel_remove(struct platform_device *pdev)
 {
+	if (lp->dma_vaddr) {
+		dma_free_coherent(&pdev->dev, lp->dma_size, lp->dma_vaddr, lp->dma_handle);
+		printk(KERN_INFO "sobel: DMA buffer freed\n");
+	}
+
 	printk(KERN_WARNING "sobel platform driver removed\n");
 	iowrite32(0, lp->base_addr);
 	iounmap(lp->base_addr);
@@ -179,7 +209,7 @@ ssize_t sobel_write(struct file *pfile, const char __user *buffer, size_t length
 	char buff[BUFF_SIZE];
 	int ret = 0;
 	u32 base_addr_val=0;
-	char *at;
+	//char *at;
 
 	if (length >= BUFF_SIZE)
     		return -EINVAL;
@@ -189,47 +219,52 @@ ssize_t sobel_write(struct file *pfile, const char __user *buffer, size_t length
 		return -EFAULT;
 	buff[length] = '\0';
 
-	// check first 5 chars are "start"
-	if (strncmp(buff, "start", 5) != 0) {
-		printk(KERN_ERR "sobel: expected 'start @your_address' command\n");
-		return -EINVAL;
-	}
 
-	// find the '@', parse what follows as hex
-	at = strchr(buff, '@');
-	if (!at) {
-		printk(KERN_ERR "sobel: no '@your_address' found\n");
-		return -EINVAL;
-	}
+	if (length > 0 && buff[length - 1] == '\n')
+		buff[length - 1] = '\0';
 
-
-	// HEX  INPUT
-	if(*(at + 1) == '0' && (*(at + 2) == 'x' || *(at + 2) == 'X')) 
+	if (strcmp(buff, "start") == 0)
 	{
-		ret = kstrtou32(at + 3, 16, &base_addr_val);
-	}
-	// DECIMAL INPUT
-	else 
-	{
-		ret = kstrtou32(at + 1, 10, &base_addr_val);
-	}
+		unsigned long timeout;
+		u32 ready;
 
+		// start IP
+		base_addr_val = lp->dma_handle;
+		iowrite32(base_addr_val, lp->base_addr + BASE_ADDR_OFFSET);
+		printk(KERN_INFO "Sobel: succesfully wrote base address value %#x\n",base_addr_val);
 
-	if (!ret)
-	{
-		iowrite32((u32)base_addr_val, lp->base_addr + BASE_ADDR_OFFSET); 
-		printk(KERN_INFO "Succesfully wrote base address value %#x\n",(u32)base_addr_val);
+                iowrite32(1, lp->base_addr + START_OFFSET);
+                iowrite32(0, lp->base_addr + START_OFFSET);
+                printk(KERN_INFO "Sobel: succesfully started IP\n");
 
-		iowrite32(1, lp->base_addr + START_OFFSET);
-		iowrite32(0, lp->base_addr + START_OFFSET);
-		printk(KERN_INFO "Succesfully started sobel IP\n");
+		// Check if Sobel finished processing every 1~2ms
+		// Wait until it reads 1 again.
+		timeout = jiffies + msecs_to_jiffies(1000);  // 1 second max wait
+
+		while (1)
+		{
+			ready = ioread32(lp->base_addr + READY_OFFSET) & 0x1;
+			if (ready == 1)
+				break;  // IP finished
+
+			// 1 second timeout guard if IP gets stuck
+			if (time_after(jiffies, timeout))
+			{
+				printk(KERN_ERR "Sobel: timeout waiting for IP to finish\n");
+				return -ETIMEDOUT;
+			}
+
+		usleep_range(1000, 2000);  // sleep ~1-2ms, CPU free for other work
+		}
+
+		printk(KERN_INFO "Sobel: IP finished, output images ready\n");
 	}
 	else
 	{
-		printk(KERN_INFO "Wrong command format, should be 'start @your_address'\n"); 
+		printk(KERN_INFO "Sobel: wrong start command, should be 'start'\n");
 	}
 
-	//printk(KERN_INFO "Succesfully wrote into file\n"); 
+	//printk(KERN_INFO "Succesfully wrote into file\n");
 	return length;
 }
 
