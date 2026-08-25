@@ -1,9 +1,10 @@
 #include <linux/dma-mapping.h>	// dma_alloc_coherent()
+#include <linux/mm.h>		// for mmap, vm_area_struct
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/of_address.h>
-#include <linux/delay.h>      // usleep_range()
-#include <linux/jiffies.h>    // jiffies, time_after(), msecs_to_jiffies()
+#include <linux/delay.h>	// usleep_range()
+#include <linux/jiffies.h>	// jiffies, time_after(), msecs_to_jiffies()
 
 #include <linux/kernel.h>
 #include <linux/string.h>
@@ -40,6 +41,7 @@ struct sobel_info {
 	void *dma_vaddr;		// CPU virtual addr of the DMA buffer region
 	dma_addr_t dma_handle;		// physical address of the start of the DMA buffer region -> goes to base_address register
 	size_t dma_size;		// DMA buffer region size
+	struct platform_device *pdev;	// needed inisde mmap()
 };
 
 dev_t my_dev_id;
@@ -57,6 +59,7 @@ int sobel_open(struct inode *pinode, struct file *pfile);
 int sobel_close(struct inode *pinode, struct file *pfile);
 ssize_t sobel_read(struct file *pfile, char __user *buffer, size_t length, loff_t *offset);
 ssize_t sobel_write(struct file *pfile, const char __user *buffer, size_t length, loff_t *offset);
+int sobel_mmap(struct file *pfile, struct vm_area_struct *vma);
 static int __init sobel_init(void);
 static void __exit sobel_exit(void);
 
@@ -67,6 +70,7 @@ struct file_operations my_fops =
 	.read = sobel_read,
 	.write = sobel_write,
 	.release = sobel_close,
+	.mmap = sobel_mmap,
 };
 
 static struct of_device_id sobel_of_match[] = {
@@ -105,6 +109,7 @@ static int sobel_probe(struct platform_device *pdev)
 	lp->mem_start = r_mem->start;
 	lp->mem_end = r_mem->end;
 	//printk(KERN_INFO "Start address:%x \t end address:%x", r_mem->start, r_mem->end);
+	lp->pdev = pdev;
 
 	if (!request_mem_region(lp->mem_start,lp->mem_end - lp->mem_start + 1,	DRIVER_NAME))
 	{
@@ -266,6 +271,28 @@ ssize_t sobel_write(struct file *pfile, const char __user *buffer, size_t length
 
 	//printk(KERN_INFO "Succesfully wrote into file\n");
 	return length;
+}
+
+int sobel_mmap(struct file *pfile, struct vm_area_struct *vma)
+{
+	int ret;
+	unsigned long requested_size = vma->vm_end - vma->vm_start;
+
+	// make sure the app isnt asking to map more than buffer size
+	if (requested_size > lp->dma_size) {
+		printk(KERN_ERR "sobel: mmap size %lu too large (buffer is %zu)\n", requested_size, lp->dma_size);
+		return -EINVAL;
+	}
+
+	// map the DMA buffer region into the application's address space
+	ret = dma_mmap_coherent(&lp->pdev->dev, vma, lp->dma_vaddr, lp->dma_handle, lp->dma_size);
+	if (ret) {
+		printk(KERN_ERR "sobel: dma_mmap_coherent failed (%d)\n", ret);
+		return ret;
+	}
+
+	printk(KERN_INFO "sobel: buffer mmapped to userspace\n");
+	return 0;
 }
 
 static int __init sobel_init(void)
