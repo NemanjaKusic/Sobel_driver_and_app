@@ -1,5 +1,5 @@
 #include <linux/dma-mapping.h>	// dma_alloc_coherent()
-#include <linux/mm.h>		// for mmap, vm_area_struct
+#include <linux/mm.h>		// for mmap, vm_area_struct, PAGE_ALIGN
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/of_address.h>
@@ -22,8 +22,7 @@
 #include <linux/slab.h>//kmalloc kfree
 #include <linux/platform_device.h>//platform driver
 #include <linux/ioport.h>//ioremap
-#define BUFF_SIZE 20
-#define BUFF_SIZE 20
+#define BUFF_SIZE 50
 #define DRIVER_NAME "sobel"
 
 #define START_OFFSET 0
@@ -126,7 +125,7 @@ static int sobel_probe(struct platform_device *pdev)
 	}
 
 	// DMA allocates the safe memory region inisde DDR
-	lp->dma_size = SOBEL_DMA_SIZE;
+	lp->dma_size = PAGE_ALIGN(SOBEL_DMA_SIZE);
 	lp->dma_vaddr = dma_alloc_coherent(&pdev->dev, lp->dma_size, &lp->dma_handle, GFP_KERNEL);
 
 	if (!lp->dma_vaddr) {
@@ -169,6 +168,8 @@ static int sobel_remove(struct platform_device *pdev)
 
 int sobel_open(struct inode *pinode, struct file *pfile) 
 {
+	// Every second app run gives a seg fault, this solves it
+	endRead = 0;
 	printk(KERN_INFO "Succesfully opened sobel\n");
 	return 0;
 }
@@ -192,13 +193,13 @@ ssize_t sobel_read(struct file *pfile, char __user *buffer, size_t length, loff_
 
 	ready_val = ioread32(lp->base_addr + READY_OFFSET);
 
-	if((ready_val) & 0x01)
-		buff[0] = '1';
-	else
-		buff[0] = '0';
+	// format both ready and buffer size into the output string
+	len = scnprintf(buff, BUFF_SIZE, "ready = %u\ndma_buffer_size = %zu\n", ready_val, lp->dma_size);
 
-	buff[1]= '\n';
-	len=2;
+	//protection if the buff is larger than what the user requested
+	if (length < len)
+		len = length;
+
 	ret = copy_to_user(buffer, buff, len);
 	if(ret)
 		return -EFAULT;
@@ -216,7 +217,7 @@ ssize_t sobel_write(struct file *pfile, const char __user *buffer, size_t length
 	u32 base_addr_val=0;
 	//char *at;
 
-	if (length >= BUFF_SIZE)
+ 	if (length >= BUFF_SIZE)
     		return -EINVAL;
 
 	ret = copy_from_user(buff, buffer, length);
