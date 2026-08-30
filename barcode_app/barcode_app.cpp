@@ -8,7 +8,23 @@
 #include <unistd.h>
 #include <sys/mman.h>
 
+#define TABLE_SIZE( X ) ( sizeof( (X) ) / sizeof( (X)[0] ) )
+#define ROUNDINT( F ) static_cast<int>( 0.5 + (F) )
+
 using namespace cv;
+using namespace std;
+
+struct CompareContourAreas
+{	//todo very inefficient
+	static bool Asc(const std::vector< cv::Point>& contour1, const std::vector<cv::Point>& contour2) {
+		double i = fabs(cv::contourArea(cv::Mat(contour1)));
+		double j = fabs(cv::contourArea(cv::Mat(contour2)));
+		return (i < j);
+	}
+	static bool Desc(const std::vector< cv::Point>& contour1, const std::vector<cv::Point>& contour2) {
+		return Asc(contour2, contour1);
+	}
+};using namespace cv;
 using namespace std;
 
 // Input/ouptut image sizes fixed at 600x450p
@@ -113,7 +129,7 @@ int main(int argc, char *argv[])
 	// Mats are valid until munmap() call
 	Mat gradX_hw(HEIGHT, WIDTH, CV_16S, buf + OFF_GRADX);
 	Mat gradY_hw(HEIGHT, WIDTH, CV_16S, buf + OFF_GRADY);
-
+/*
 	// gradX to text, one value per line
 	FILE *fx = fopen("gradx.txt", "w");
 	for (int r = 0; r < gradX_hw.rows; r++) {
@@ -140,8 +156,73 @@ int main(int argc, char *argv[])
 
 	// buf free - cant use gradX_hw and gradY_hw anymore
 	munmap(buf, dma_size);
+	close(fd);а
+*/
+	//cout << "Hardware Sobel complete" << endl;
+
+	//subtract gradY form gradX
+	Mat gradient(HEIGHT, WIDTH, CV_32F);
+	subtract(gradY_hw, gradX_hw, gradient);
+
+	// buf free - cant use gradX_hw and gradY_hw anymore
+	munmap(buf, dma_size);
 	close(fd);
 
-	//cout << "Hardware Sobel complete" << endl;
+	//8-bit brightness
+	Mat grad;
+	convertScaleAbs(gradient, grad);
+
+	//blur the image
+	Mat blurred;
+	blur(grad, blurred, Size(9, 9));
+
+	//brightness can be 0 or 255
+	Mat thresh;
+	threshold(blurred, thresh, 225, 255, THRESH_BINARY);
+
+	//to expand the white parts of the image
+	Mat kernel;
+	kernel = getStructuringElement(MORPH_RECT, Size(30, 7));
+	Mat closed;
+	morphologyEx(thresh, closed, MORPH_CLOSE, kernel);
+
+	//to make the dots in the picture disappear
+	kernel = getStructuringElement(MORPH_RECT, Size(3, 3));
+	erode(closed, closed, kernel, Point(-1, -1) , 4);
+	dilate(closed, closed, kernel, Point(-1, -1), 4);
+
+	//find contours (more precisely contour edges - because RETR_EXTERNAL)
+	vector<vector<Point>> contours;
+	vector<Vec4i> hierarchy;
+	findContours(closed, contours, hierarchy, RETR_EXTERNAL, CHAIN_APPROX_NONE);
+	//draw contours
+
+	std::sort(contours.begin(), contours.end(), CompareContourAreas::Desc);
+	const  std::vector< cv::Point >& biggestContour = contours[0];
+
+	//minAreaRect accepts only Point or Point2f, i.e. points of type CV_32S or CV_32F.
+	cv::RotatedRect rect = cv::minAreaRect(biggestContour);
+
+	//It seems cv::boxPoints() needs a cv::Mat as the OutputArray.
+		//The rows are the 4 points and the two columns are x and y.
+		//The function cv::boxPoints() finds the four vertices of a rotated rectangle.
+		//This function is useful to draw the rectangle.
+		//In C++, instead of using this function, you can directly use box.points() method.
+	cv::Point2f vertices[4];
+	rect.points(vertices);
+
+	std::vector< std::vector< cv::Point > > contours2;
+	contours2.push_back(std::vector< cv::Point >());
+	std::vector< cv::Point >& vcBoxpoints = contours2.back();
+	for (int z = 0; z < TABLE_SIZE(vertices); z++)
+	{
+		const cv::Point2f& pf = vertices[z];
+		vcBoxpoints.push_back(cv::Point(ROUNDINT(pf.x), ROUNDINT(pf.y)));
+	} // for (;;)
+
+	Mat image_copy = image.clone();
+	cv::drawContours(image_copy, contours2, (-1), cv::Scalar(0, 255, 0), 3);
+
+	imwrite("barcode_found.jpg", image_copy);
 	return 0;
 }
